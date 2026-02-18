@@ -1,0 +1,25 @@
+# VLC Scheduler Configuration
+# ===========================
+#
+# Format: DAY  HH:MM  /path/to/playlist.m3u
+#
+# DAY can be: MON, TUE, WED, THU, FRI, SAT, SUN (case-insensitive)
+# TIME is in 24-hour format
+# PATH is the absolute path to an M3U playlist file
+#
+# Lines starting with '#' are comments. Blank lines are ignored.
+#
+# Usage:
+#   vlc --intf scheduler --scheduler-config /path/to/schedule.conf
+#   vlc --intf scheduler --scheduler-config /path/to/schedule.conf --scheduler-fullscreen
+#
+# The plugin polls every 30 seconds, so playback may start up to 30s
+# after the scheduled time.
+
+MON      22:30  /path/to/monday.m3u
+TUE      22:30  /path/to/tuesday.m3u
+WED      22:30  /path/to/wednesday.m3u
+THU      22:30  /path/to/thursday.m3u
+FRI      22:30  /path/to/friday.m3u
+SAT      22:30  /path/to/saturday.m3u
+SUN      22:30  /path/to/sunday.m3u

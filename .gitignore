@@ -1,0 +1,28 @@
+# Build artifacts
+*.dylib
+*.so
+*.dll
+*.o
+
+# VLC source trees (cloned for headers)
+vlc/
+vlc3/
+
+# Test files
+test.m3u
+test_schedule.conf
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# macOS
+.DS_Store
+
+# Claude Code
+.claude/
+
+# Logs
+*.log

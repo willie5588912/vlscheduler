@@ -403,11 +403,23 @@ static void TimerCallback(void *data)
         /* Load the M3U and start playback */
         if (LoadM3U(intf, e->path) == VLC_SUCCESS && sys->fullscreen)
         {
-            /* VLC 3.x: toggle fullscreen via the current input's vout */
+            /*
+             * VLC 3.x fullscreen: set on both playlist and vout.
+             * The playlist variable is inherited by future vouts,
+             * so this works even before the video output is created.
+             * (Same pattern as hotkeys.c)
+             */
+            var_SetBool(sys->playlist, "fullscreen", true);
+
             input_thread_t *p_input = playlist_CurrentInput(sys->playlist);
             if (p_input != NULL)
             {
-                var_SetBool(p_input, "fullscreen", true);
+                vout_thread_t *p_vout = input_GetVout(p_input);
+                if (p_vout != NULL)
+                {
+                    var_SetBool(p_vout, "fullscreen", true);
+                    vlc_object_release(p_vout);
+                }
                 vlc_object_release(p_input);
             }
         }

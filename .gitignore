@@ -11,6 +11,7 @@ vlc3/
 # Test files
 test.m3u
 test_schedule.conf
+test-video.mp4
 
 # IDE / editor
 .vscode/

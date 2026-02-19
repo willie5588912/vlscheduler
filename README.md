@@ -7,7 +7,7 @@ Set up weekly schedules (e.g., play a playlist every Monday at 22:30) through a 
 
 Author: Wei Shih
 Homepage: https://github.com/user/vlscheduler
-License: GPL v2+
+License: [GPL v2+](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)
 
 ## Features
 

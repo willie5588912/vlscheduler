@@ -27,3 +27,9 @@ test-video.mp4
 
 # Logs
 *.log
+
+# Release packages
+vlscheduler-*.zip
+
+# Cloned references
+vlsub/

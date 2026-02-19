@@ -39,6 +39,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <sys/stat.h>
 
 /* For out-of-tree builds, N_() may not be available */
 #ifndef N_
@@ -54,6 +55,7 @@
 #include <vlc_input_item.h>
 #include <vlc_url.h>
 #include <vlc_threads.h>
+#include <vlc_configuration.h>
 
 /*****************************************************************************
  * Constants
@@ -81,6 +83,10 @@ struct intf_sys_t
 
     struct sched_entry entries[SCHED_MAX_ENTRIES];
     int                entry_count;
+
+    /* Config hot-reload */
+    char              *config_path;
+    time_t             config_mtime;
 
     /* De-duplication: prevent re-triggering within same minute */
     int                last_triggered_day;
@@ -363,6 +369,24 @@ static void TimerCallback(void *data)
     intf_thread_t *intf = (intf_thread_t *)data;
     intf_sys_t *sys = intf->p_sys;
 
+    /* Hot-reload: check if config file was modified */
+    struct stat st;
+    if (sys->config_path && stat(sys->config_path, &st) == 0
+        && st.st_mtime != sys->config_mtime)
+    {
+        msg_Info(intf, "scheduler: config file changed, reloading...");
+        sys->entry_count = 0;
+        if (ParseConfig(intf, sys->config_path) == VLC_SUCCESS)
+        {
+            sys->config_mtime = st.st_mtime;
+            msg_Info(intf, "scheduler: reloaded %d entries", sys->entry_count);
+        }
+        else
+        {
+            msg_Warn(intf, "scheduler: reload failed, keeping old config");
+        }
+    }
+
     /* Get current wall-clock time */
     time_t now = time(NULL);
     struct tm tm_now;
@@ -435,14 +459,29 @@ static int Open(vlc_object_t *obj)
 {
     intf_thread_t *intf = (intf_thread_t *)obj;
 
-    /* Read the config file path */
+    /* Read the config file path, with default fallback */
     char *config_path = var_InheritString(intf, "scheduler-config");
     if (config_path == NULL || config_path[0] == '\0')
     {
-        msg_Err(intf, "scheduler: no config file specified "
-                      "(set --scheduler-config)");
         free(config_path);
-        return VLC_EGENERIC;
+        config_path = NULL;
+
+        /* Fall back to default: userdatadir/scheduler/schedule.conf */
+        char *data_dir = config_GetUserDir(VLC_DATA_DIR);
+        if (data_dir != NULL)
+        {
+            if (asprintf(&config_path, "%s/scheduler/schedule.conf",
+                         data_dir) == -1)
+                config_path = NULL;
+            free(data_dir);
+        }
+        if (config_path == NULL)
+        {
+            msg_Err(intf, "scheduler: no config file specified "
+                          "(set --scheduler-config)");
+            return VLC_EGENERIC;
+        }
+        msg_Info(intf, "scheduler: using default config: %s", config_path);
     }
 
     /* Allocate system data */
@@ -461,18 +500,24 @@ static int Open(vlc_object_t *obj)
     sys->last_triggered_hour   = -1;
     sys->last_triggered_minute = -1;
 
+    sys->config_path = config_path;
+    sys->config_mtime = 0;
     intf->p_sys = sys;
 
     /* Parse configuration file */
     if (ParseConfig(intf, config_path) != VLC_SUCCESS)
     {
         msg_Err(intf, "scheduler: failed to parse config '%s'", config_path);
-        free(config_path);
+        free(sys->config_path);
         free(sys);
         intf->p_sys = NULL;
         return VLC_EGENERIC;
     }
-    free(config_path);
+
+    /* Record initial mtime for hot-reload detection */
+    struct stat st;
+    if (stat(config_path, &st) == 0)
+        sys->config_mtime = st.st_mtime;
 
     /* Create the polling timer */
     if (vlc_timer_create(&sys->timer, TimerCallback, intf) != 0)
@@ -504,6 +549,7 @@ static void Close(vlc_object_t *obj)
     vlc_timer_destroy(sys->timer);
 
     msg_Info(intf, "scheduler: stopped");
+    free(sys->config_path);
     free(sys);
 }
 

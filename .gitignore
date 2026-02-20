@@ -3,10 +3,24 @@
 *.so
 *.dll
 *.o
+*.obj
+*.lib
+*.exp
+*.pdb
+
+# CMake
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
 
 # VLC source trees (cloned for headers)
 vlc/
-vlc3/
+# Keep only the VLC 3.x headers needed for out-of-tree compilation
+vlc3/*
+!vlc3/include/
+vlc3/include/*
+!vlc3/include/*.h
 
 # Test files
 test.m3u

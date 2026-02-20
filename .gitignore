@@ -16,7 +16,11 @@ cmake_install.cmake
 
 # VLC source trees (cloned for headers)
 vlc/
-vlc3/
+# Ignore vlc3/ contents but keep stub headers for out-of-tree compilation
+vlc3/*
+!vlc3/include/
+vlc3/include/*
+!vlc3/include/*.h
 
 # Test files
 test.m3u

@@ -54,7 +54,9 @@ Copy the appropriate binary to VLC's plugin directory:
 
 #### Building from source
 
-Requires VLC 3.x development headers.
+Requires VLC 3.x development headers. Place them in `vlc3/include/` or point the build system at your VLC SDK.
+
+**macOS / Linux (Make):**
 
 ```bash
 git clone https://github.com/user/vlscheduler.git
@@ -64,6 +66,25 @@ make install
 ```
 
 The Makefile auto-detects your platform and builds the correct library format (`.dylib` / `.so` / `.dll`).
+
+**Windows with MinGW / MSYS2 (Make):**
+
+```bash
+pacman -S mingw-w64-x86_64-gcc make zip    # install toolchain in MSYS2
+make VLC_INCLUDE="C:/Program Files/VideoLAN/VLC/sdk/include"
+make install
+```
+
+**Windows with MSVC (CMake):**
+
+```powershell
+cmake -B build -DVLC_INCLUDE_DIR="C:/Program Files/VideoLAN/VLC/sdk/include" ^
+               -DVLC_LIB_DIR="C:/Program Files/VideoLAN/VLC/sdk/lib"
+cmake --build build --config Release
+cmake --install build
+```
+
+The VLC SDK headers and `vlccore.lib` are included in the [VLC source tarball](https://www.videolan.org/vlc/download-sources.html) under `sdk/`.
 
 ## Usage
 
@@ -112,7 +133,7 @@ Each line: `DAY  HH:MM  /path/to/playlist.m3u`
 - **VLC 3.x** (tested with VLC 3.0.x)
 - **macOS:** Full support including native file picker
 - **Linux:** File picker via zenity (GNOME) or kdialog (KDE)
-- **Windows:** File picker via PowerShell dialog
+- **Windows:** Full support — builds with MinGW/MSYS2 or MSVC; file picker via PowerShell dialog
 
 ## Changelog
 

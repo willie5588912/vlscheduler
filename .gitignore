@@ -3,6 +3,16 @@
 *.so
 *.dll
 *.o
+*.obj
+*.lib
+*.exp
+*.pdb
+
+# CMake
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
 
 # VLC source trees (cloned for headers)
 vlc/

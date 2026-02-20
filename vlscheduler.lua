@@ -374,10 +374,12 @@ function ensure_scheduler_autostart(conf_path)
     pcall(function()
         local current = vlc.config.get("extraintf") or ""
         if not string.find(current, "scheduler") then
+            -- VLC uses ":" as separator on Unix, ";" on Windows
+            local sep = (OS == "windows") and ";" or ":"
             if current == "" then
                 vlc.config.set("extraintf", "scheduler")
             else
-                vlc.config.set("extraintf", current .. ":scheduler")
+                vlc.config.set("extraintf", current .. sep .. "scheduler")
             end
         end
     end)

@@ -30,6 +30,8 @@ test-video.mp4
 
 # Release packages
 vlscheduler-*.zip
+vlscheduler-*.pkg
+pkg-build/
 
 # Cloned references
 vlsub/

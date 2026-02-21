@@ -82,15 +82,13 @@ typedef struct vlc_timer *vlc_timer_t;
 # define VLC_THREAD_PRIORITY_OUTPUT   THREAD_PRIORITY_ABOVE_NORMAL
 # define VLC_THREAD_PRIORITY_HIGHEST  THREAD_PRIORITY_TIME_CRITICAL
 
+struct pollfd;  /* forward declaration for out-of-tree builds */
+
 static inline int vlc_poll(struct pollfd *fds, unsigned nfds, int timeout)
 {
-    int val;
-
+    (void)fds; (void)nfds; (void)timeout;
     vlc_testcancel();
-    val = poll(fds, nfds, timeout);
-    if (val < 0)
-        vlc_testcancel();
-    return val;
+    return -1; /* stub: not used by out-of-tree plugins */
 }
 # define poll(u,n,t) vlc_poll(u, n, t)
 

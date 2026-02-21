@@ -57,7 +57,7 @@
 #endif
 
 /* Portable asprintf for platforms that lack it (e.g. MSVC on Windows) */
-#if defined(_WIN32) && !defined(__MINGW32__)
+#if defined(_WIN32)
 #include <stdarg.h>
 static int asprintf(char **strp, const char *fmt, ...)
 {

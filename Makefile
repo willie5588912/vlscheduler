@@ -1,72 +1,119 @@
 # VLScheduler - Out-of-tree build for VLC 3.x
 #
-# Build:   make
+# Build:
+#   make windows      (MinGW / MSYS2)
+#   make linux
+#   make macos
+#
 # Install: make install      (C plugin + Lua extension)
 # Package: make package      (create release ZIP)
 # Clean:   make clean
-#
-# For Windows with MSVC, use CMakeLists.txt instead:
-#   cmake -B build -DVLC_INCLUDE_DIR=path/to/vlc/sdk/include
-#   cmake --build build --config Release
 
 VERSION = 0.0.1
 PLUGIN_NAME = scheduler
 VLC_INCLUDE ?= ./vlc3/include
 
-CC ?= cc
+CC ?= gcc
 
-# Compiler flags
-CFLAGS += -Wall -Wextra -O2 -fPIC \
-          -I$(VLC_INCLUDE) \
-          -D__PLUGIN__ \
-          -DMODULE_STRING=\"$(PLUGIN_NAME)\" \
-          -D_FILE_OFFSET_BITS=64
+# Common compiler flags
+COMMON_CFLAGS = -Wall -Wextra -O2 -fPIC \
+                -I$(VLC_INCLUDE) \
+                -D__PLUGIN__ \
+                -DMODULE_STRING=\"$(PLUGIN_NAME)\" \
+                -D_FILE_OFFSET_BITS=64
 
-# Platform detection
-UNAME := $(shell uname -s 2>/dev/null || echo Windows)
+# ---------------------------------------------------------------------------
+# Windows (MinGW / MSYS2)
+# ---------------------------------------------------------------------------
+WIN_OUTPUT = $(PLUGIN_NAME)_plugin.dll
+WIN_LDFLAGS = -shared -L. -lvlccore
 
-ifeq ($(UNAME),Darwin)
-  OUTPUT = lib$(PLUGIN_NAME)_plugin.dylib
-  LDFLAGS += -dynamiclib -undefined dynamic_lookup
-  INSTALL_DIR ?= $(HOME)/Library/Application Support/org.videolan.vlc/plugins
-  EXT_DIR ?= /Applications/VLC.app/Contents/MacOS/share/lua/extensions
-  PLATFORM_TAG = macOS
-else ifeq ($(UNAME),Linux)
-  OUTPUT = lib$(PLUGIN_NAME)_plugin.so
-  LDFLAGS += -shared
-  INSTALL_DIR ?= $(HOME)/.local/share/vlc/plugins
-  EXT_DIR ?= $(HOME)/.local/share/vlc/lua/extensions
-  PLATFORM_TAG = Linux
+VLC_DIR ?= $(shell \
+  for d in \
+    "$(PROGRAMFILES)/VideoLAN/VLC" \
+    "$(ProgramFiles)/VideoLAN/VLC" \
+    "/c/Program Files/VideoLAN/VLC" \
+    "/c/Program Files (x86)/VideoLAN/VLC"; \
+  do [ -f "$$d/libvlccore.dll" ] && echo "$$d" && break; done 2>/dev/null)
+
+# Auto-generate import library from VLC's DLL
+libvlccore.a:
+ifneq ($(VLC_DIR),)
+	gendef "$(VLC_DIR)/libvlccore.dll"
+	dlltool -d libvlccore.def -l libvlccore.a -D libvlccore.dll
 else
-  # Windows (MinGW / MSYS2)
-  OUTPUT = $(PLUGIN_NAME)_plugin.dll
-  LDFLAGS += -shared -lvlccore
+	@echo "ERROR: VLC not found. Set VLC_DIR=/path/to/VLC" && exit 1
+endif
+
+.PHONY: windows linux macos all clean install uninstall package
+
+windows: export TMPDIR ?= /tmp
+windows: export TMP ?= /tmp
+windows: export TEMP ?= /tmp
+windows: libvlccore.a
+	$(CC) $(COMMON_CFLAGS) scheduler.c -o $(WIN_OUTPUT) $(WIN_LDFLAGS)
+	@echo "Built $(WIN_OUTPUT)"
+
+# ---------------------------------------------------------------------------
+# Linux
+# ---------------------------------------------------------------------------
+LINUX_OUTPUT = lib$(PLUGIN_NAME)_plugin.so
+LINUX_LDFLAGS = -shared
+
+linux:
+	$(CC) $(COMMON_CFLAGS) scheduler.c -o $(LINUX_OUTPUT) $(LINUX_LDFLAGS)
+	@echo "Built $(LINUX_OUTPUT)"
+
+# ---------------------------------------------------------------------------
+# macOS
+# ---------------------------------------------------------------------------
+MACOS_OUTPUT = lib$(PLUGIN_NAME)_plugin.dylib
+MACOS_LDFLAGS = -dynamiclib -undefined dynamic_lookup
+
+macos:
+	$(CC) $(COMMON_CFLAGS) scheduler.c -o $(MACOS_OUTPUT) $(MACOS_LDFLAGS)
+	@echo "Built $(MACOS_OUTPUT)"
+
+# ---------------------------------------------------------------------------
+# Install / Uninstall / Package / Clean
+# ---------------------------------------------------------------------------
+
+# Detect which output exists for install/package targets
+OUTPUT = $(wildcard $(WIN_OUTPUT) $(LINUX_OUTPUT) $(MACOS_OUTPUT))
+
+ifeq ($(OS),Windows_NT)
   INSTALL_DIR ?= $(APPDATA)/vlc/plugins
   EXT_DIR ?= $(APPDATA)/vlc/lua/extensions
   PLATFORM_TAG = Windows
+else
+  UNAME := $(shell uname -s)
+  ifeq ($(UNAME),Darwin)
+    INSTALL_DIR ?= $(HOME)/Library/Application Support/org.videolan.vlc/plugins
+    EXT_DIR ?= /Applications/VLC.app/Contents/MacOS/share/lua/extensions
+    PLATFORM_TAG = macOS
+  else
+    INSTALL_DIR ?= $(HOME)/.local/share/vlc/plugins
+    EXT_DIR ?= $(HOME)/.local/share/vlc/lua/extensions
+    PLATFORM_TAG = Linux
+  endif
 endif
 
-.PHONY: all clean install uninstall package
-
-all: $(OUTPUT)
-
-$(OUTPUT): scheduler.c
-	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
-
-install: $(OUTPUT)
+install:
+	@if [ -z "$(OUTPUT)" ]; then echo "ERROR: No plugin built. Run make windows/linux/macos first." && exit 1; fi
 	@mkdir -p "$(INSTALL_DIR)"
-	cp $(OUTPUT) "$(INSTALL_DIR)/$(OUTPUT)"
+	cp $(OUTPUT) "$(INSTALL_DIR)/"
 	@mkdir -p "$(EXT_DIR)"
 	cp vlscheduler.lua "$(EXT_DIR)/vlscheduler.lua"
 	@echo "Installed plugin to $(INSTALL_DIR)"
 	@echo "Installed extension to $(EXT_DIR)"
 
 uninstall:
-	rm -f "$(INSTALL_DIR)/$(OUTPUT)"
+	rm -f "$(INSTALL_DIR)/$(WIN_OUTPUT)" "$(INSTALL_DIR)/$(LINUX_OUTPUT)" "$(INSTALL_DIR)/$(MACOS_OUTPUT)"
 	rm -f "$(EXT_DIR)/vlscheduler.lua"
 	@echo "Removed VLScheduler"
 
-package: $(OUTPUT)
+package:
+	@if [ -z "$(OUTPUT)" ]; then echo "ERROR: No plugin built. Run make windows/linux/macos first." && exit 1; fi
 	@rm -rf vlscheduler-$(VERSION)
 	@mkdir -p vlscheduler-$(VERSION)
 	cp vlscheduler.lua vlscheduler-$(VERSION)/
@@ -80,5 +127,6 @@ package: $(OUTPUT)
 	@echo "Created vlscheduler-$(VERSION)-$(PLATFORM_TAG).zip"
 
 clean:
-	rm -f $(OUTPUT) lib$(PLUGIN_NAME)_plugin.dylib lib$(PLUGIN_NAME)_plugin.so $(PLUGIN_NAME)_plugin.dll
+	rm -f $(WIN_OUTPUT) $(LINUX_OUTPUT) $(MACOS_OUTPUT)
+	rm -f libvlccore.a libvlccore.def
 	rm -f vlscheduler-*.zip

@@ -92,7 +92,6 @@ ifneq ($(filter MINGW% MSYS%,$(UNAME)),)
 endif
 
 ifdef IS_WINDOWS
-  # Resolve APPDATA via cygpath — make may not inherit it under MSYS2/Git Bash
   WIN_APPDATA := $(shell cygpath --folder 26 2>/dev/null)
   INSTALL_DIR ?= $(VLC_DIR)/plugins/misc
   EXT_DIR ?= $(WIN_APPDATA)/vlc/lua/extensions

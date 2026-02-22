@@ -64,11 +64,12 @@ function descriptor()
         description = "Schedule automatic playlist playback on specific "
                    .. "weekdays and times. Select days, set times, choose "
                    .. "media files, and VLC will play them on schedule.",
-        capabilities = {}
+        capabilities = {"menu"}
     }
 end
 
 function activate()
+    OS = detect_os()
     for i = 1, 7 do
         selected_files[i] = {}
     end
@@ -86,27 +87,33 @@ function close()
     vlc.deactivate()
 end
 
+function menu()
+    return {"Schedule Setup"}
+end
+
+function trigger_menu(id)
+    if id == 1 then
+        create_dialog()
+        click_load()
+    end
+end
+
 ---------------------------------------------------------------------------
 -- Platform detection
 ---------------------------------------------------------------------------
+local OS = nil
+
 function detect_os()
-    local sep = package.config:sub(1, 1)
-    if sep == "\\" then
+    -- VLC's Lua sandbox doesn't expose 'package'; probe via config dir
+    local dir = vlc.config.userdatadir() or ""
+    if string.find(dir, "\\") or string.find(dir, ":%\\") or string.find(dir, ":/") then
         return "windows"
     end
-    -- Distinguish macOS from Linux
-    local ok, handle = pcall(io.popen, "uname -s 2>/dev/null")
-    if ok and handle then
-        local result = handle:read("*l")
-        handle:close()
-        if result and result:find("Darwin") then
-            return "macos"
-        end
+    if string.find(dir, "/Library/") or string.find(dir, "org%.videolan%.vlc") then
+        return "macos"
     end
     return "linux"
 end
-
-local OS = detect_os()
 
 ---------------------------------------------------------------------------
 -- Helpers

@@ -7,6 +7,8 @@
 *.lib
 *.exp
 *.pdb
+*.a
+*.def
 
 # CMake
 build/

@@ -81,12 +81,23 @@ macos:
 # Detect which output exists for install/package targets
 OUTPUT = $(wildcard $(WIN_OUTPUT) $(LINUX_OUTPUT) $(MACOS_OUTPUT))
 
+# Platform detection: check OS variable first, then uname for MSYS2/MinGW
+UNAME := $(shell uname -s 2>/dev/null)
+IS_WINDOWS :=
 ifeq ($(OS),Windows_NT)
-  INSTALL_DIR ?= $(APPDATA)/vlc/plugins
-  EXT_DIR ?= $(APPDATA)/vlc/lua/extensions
+  IS_WINDOWS = 1
+endif
+ifneq ($(filter MINGW% MSYS%,$(UNAME)),)
+  IS_WINDOWS = 1
+endif
+
+ifdef IS_WINDOWS
+  # Resolve APPDATA via cygpath — make may not inherit it under MSYS2/Git Bash
+  WIN_APPDATA := $(shell cygpath --folder 26 2>/dev/null)
+  INSTALL_DIR ?= $(VLC_DIR)/plugins/misc
+  EXT_DIR ?= $(WIN_APPDATA)/vlc/lua/extensions
   PLATFORM_TAG = Windows
 else
-  UNAME := $(shell uname -s)
   ifeq ($(UNAME),Darwin)
     INSTALL_DIR ?= $(HOME)/Library/Application Support/org.videolan.vlc/plugins
     EXT_DIR ?= /Applications/VLC.app/Contents/MacOS/share/lua/extensions

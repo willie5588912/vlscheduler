@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:wiki.videolan.org)",
+      "WebFetch(domain:forum.videolan.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:vlc-user-documentation.readthedocs.io)",
+      "WebFetch(domain:docs.videolan.me)",
+      "Bash(cd /c/Users/admin/vlscheduler && make install 2>&1)",
+      "Bash(grep:*)",
+      "Bash(echo $APPDATA:*)",
+      "Bash(grep ^WIN_APPDATA\\\\|^EXT_DIR:*)",
+      "Bash(head:*)",
+      "WebFetch(domain:addons.videolan.org)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:vlc.verg.ca)",
+      "Bash(curl:*)",
+      "WebFetch(domain:gist.github.com)",
+      "Bash(cd /c/Users/admin/vlscheduler && git clone https://github.com/Mysteriza/vlc-prev-next.git vlc-prev-next 2>&1)",
+      "Bash(grep DLL Name:*)",
+      "Bash(grep vlc_entry:*)",
+      "Bash(ls:*)"
+    ]
+  }
+}

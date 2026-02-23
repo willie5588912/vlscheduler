@@ -40,16 +40,19 @@ local DAY_FILENAMES = {
 ---------------------------------------------------------------------------
 -- State
 ---------------------------------------------------------------------------
+local OS = nil
 local dlg = nil
 local days = {}          -- [1..7], each: {enabled, hour, minute, info}
 local selected_files = {} -- [1..7], each: table of absolute file paths
 local status_label = nil
 local file_list = nil
+local viewing_day = nil  -- which day's files are shown in the list
+local pending_browse_day = nil  -- day awaiting file picker result
 
--- "Same time" widgets
-local same_time_cb = nil
+-- Shared time widgets
 local same_hour = nil
 local same_minute = nil
+
 
 ---------------------------------------------------------------------------
 -- Extension lifecycle
@@ -64,16 +67,19 @@ function descriptor()
         description = "Schedule automatic playlist playback on specific "
                    .. "weekdays and times. Select days, set times, choose "
                    .. "media files, and VLC will play them on schedule.",
-        capabilities = {}
+        capabilities = {"menu"}
     }
 end
 
 function activate()
+    OS = detect_os()
+    dbg("activate() OS=" .. tostring(OS))
     for i = 1, 7 do
         selected_files[i] = {}
     end
     create_dialog()
     click_load()
+    dbg("activate() done")
 end
 
 function deactivate()
@@ -86,27 +92,45 @@ function close()
     vlc.deactivate()
 end
 
+function menu()
+    return {"Schedule Setup"}
+end
+
+function trigger_menu(id)
+    if id == 1 then
+        create_dialog()
+        click_load()
+    end
+end
+
 ---------------------------------------------------------------------------
 -- Platform detection
 ---------------------------------------------------------------------------
 function detect_os()
-    local sep = package.config:sub(1, 1)
-    if sep == "\\" then
+    -- Use VLC's native platform flag when available
+    if vlc.win then
         return "windows"
     end
-    -- Distinguish macOS from Linux
-    local ok, handle = pcall(io.popen, "uname -s 2>/dev/null")
-    if ok and handle then
-        local result = handle:read("*l")
-        handle:close()
-        if result and result:find("Darwin") then
-            return "macos"
-        end
+    -- Fallback: probe via config dir path
+    local dir = vlc.config.userdatadir() or ""
+    if string.find(dir, "/Library/") or string.find(dir, "org%.videolan%.vlc") then
+        return "macos"
     end
     return "linux"
 end
 
-local OS = detect_os()
+---------------------------------------------------------------------------
+-- Debug logging (writes + flushes to file immediately)
+---------------------------------------------------------------------------
+local DEBUG_LOG = "C:\\Users\\admin\\vlscheduler-debug.log"
+
+function dbg(msg)
+    local f = vlc.io.open(DEBUG_LOG, "a")
+    if f then
+        f:write(os.date("%H:%M:%S") .. " " .. msg .. "\n")
+        f:close()
+    end
+end
 
 ---------------------------------------------------------------------------
 -- Helpers
@@ -136,18 +160,6 @@ function parse_time(hour_widget, minute_widget)
     return h, m
 end
 
-function sync_if_same_time()
-    if same_time_cb and same_time_cb:get_checked() then
-        local ht = same_hour:get_text()
-        local mt = same_minute:get_text()
-        for i = 1, 7 do
-            if days[i] and days[i].hour then
-                days[i].hour:set_text(ht)
-                days[i].minute:set_text(mt)
-            end
-        end
-    end
-end
 
 function basename(filepath)
     return string.match(filepath, "([^/\\]+)$") or filepath
@@ -204,26 +216,57 @@ function browse_files_linux(day_index)
         .. '2>/dev/null'
 end
 
-function browse_files_windows(day_index)
-    -- PowerShell file dialog
-    return 'powershell -NoProfile -Command "'
-        .. '[System.Reflection.Assembly]::LoadWithPartialName(\\"System.Windows.Forms\\") | Out-Null; '
-        .. '$d = New-Object System.Windows.Forms.OpenFileDialog; '
-        .. '$d.Title = \\"Select media files for ' .. DAY_NAMES[day_index] .. '\\"; '
-        .. '$d.Filter = \\"Media files|*.mp4;*.mkv;*.avi;*.mov;*.m4v;*.ts;*.flv;*.wmv;*.mpg;*.mpeg;*.mp3;*.flac;*.wav;*.aiff;*.m4a;*.ogg\\"; '
-        .. '$d.Multiselect = $true; '
-        .. 'if ($d.ShowDialog() -eq \\"OK\\") { $d.FileNames -join [char]10 }'
-        .. '"'
-end
-
+---------------------------------------------------------------------------
+-- browse_files: entry point for all platforms
+---------------------------------------------------------------------------
 function browse_files(day_index)
-    sync_if_same_time()
+    dbg("browse_files() day=" .. tostring(day_index) .. " OS=" .. tostring(OS))
+
+    if OS == "windows" then
+        -- If there's a pending result, load it instead of opening a new picker
+        if pending_browse_day then
+            local loaded = try_load_pending()
+            if loaded then return end
+        end
+
+        dbg("browse_files() windows file picker (async)")
+        -- Use VLC's config dir for temp file (reliable cross-path)
+        local tmp_dir = vlc.config.userdatadir() .. "/scheduler"
+        local tmp_unix = tmp_dir .. "/browse_tmp.txt"
+        local tmp_win = string.gsub(tmp_unix, "/", "\\")
+        -- Remove stale temp file
+        os.remove(tmp_unix)
+
+        -- Store which day we're browsing for
+        pending_browse_day = day_index
+
+        -- Launch file picker asynchronously (non-blocking)
+        local cmd = 'start "" powershell -NoProfile -WindowStyle Hidden -Command "'
+            .. "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"
+            .. "Add-Type -AssemblyName System.Windows.Forms;"
+            .. "$f = New-Object System.Windows.Forms.OpenFileDialog;"
+            .. "$f.Multiselect = $true;"
+            .. "$f.Filter = 'Media files|*.mp4;*.mkv;*.avi;*.mov;*.m4v;*.ts;"
+            .. "*.flv;*.wmv;*.mpg;*.mpeg;*.mp3;*.flac;*.wav;*.aiff;*.m4a;*.ogg';"
+            .. "$f.Title = 'Select media files for " .. DAY_NAMES[day_index] .. "';"
+            .. "$owner = New-Object System.Windows.Forms.Form;"
+            .. "$owner.TopMost = $true;"
+            .. "if ($f.ShowDialog($owner) -eq 'OK') {"
+            .. " $f.FileNames | Out-File -Encoding utf8 -FilePath '"
+            .. tmp_win .. "'"
+            .. "}"
+            .. '"'
+        os.execute(cmd)
+
+        status_label:set_text("Pick files, then click Browse again to load.")
+        dlg:update()
+        dbg("browse_files() launched async picker")
+        return
+    end
 
     local cmd
     if OS == "macos" then
         cmd = browse_files_macos(day_index)
-    elseif OS == "windows" then
-        cmd = browse_files_windows(day_index)
     else
         cmd = browse_files_linux(day_index)
     end
@@ -252,13 +295,7 @@ function browse_files(day_index)
 
     if #files > 0 then
         selected_files[day_index] = files
-        days[day_index].info:set_text(#files .. " file(s)")
-
-        file_list:clear()
-        for idx, filepath in ipairs(files) do
-            file_list:add_value(basename(filepath), idx)
-        end
-
+        refresh_file_list(day_index)
         status_label:set_text(DAY_NAMES[day_index] .. ": Selected "
                               .. #files .. " file(s)")
     end
@@ -277,7 +314,11 @@ end
 
 function make_browse_callback(day_index)
     return function()
-        browse_files(day_index)
+        local ok, err = pcall(browse_files, day_index)
+        if not ok then
+            status_label:set_text("Error: " .. tostring(err))
+            dlg:update()
+        end
     end
 end
 
@@ -285,21 +326,18 @@ function create_dialog()
     dlg = vlc.dialog("VLScheduler")
 
     -- Row 1: Header
-    dlg:add_label("<h3>VLScheduler</h3>", 1, 1, 6, 1)
+    dlg:add_label("<h3>VLScheduler</h3>", 1, 1, 4, 1)
 
-    -- Row 2: Same time option
-    same_time_cb = dlg:add_check_box("Same time for all", false, 1, 2, 2, 1)
-    same_hour = dlg:add_text_input("00", 3, 2, 1, 1)
-    dlg:add_label(":", 4, 2, 1, 1)
-    same_minute = dlg:add_text_input("00", 5, 2, 1, 1)
+    -- Row 2: Time setting (shared for all days)
+    dlg:add_label("<b>Time:</b>", 1, 2, 1, 1)
+    same_hour = dlg:add_text_input("00", 2, 2, 1, 1)
+    dlg:add_label(":", 3, 2, 1, 1)
+    same_minute = dlg:add_text_input("00", 4, 2, 1, 1)
 
     -- Row 3: Column headers
     dlg:add_label("<b>Day</b>", 1, 3, 1, 1)
-    dlg:add_label("<b>Hour</b>", 2, 3, 1, 1)
-    dlg:add_label("", 3, 3, 1, 1)
-    dlg:add_label("<b>Min</b>", 4, 3, 1, 1)
-    dlg:add_label("<b>Files</b>", 5, 3, 1, 1)
-    dlg:add_label("", 6, 3, 1, 1)
+    dlg:add_label("<b>Files</b>", 2, 3, 2, 1)
+    dlg:add_label("", 4, 3, 1, 1)
 
     -- Rows 4-10: One per weekday
     for i = 1, 7 do
@@ -307,22 +345,23 @@ function create_dialog()
         days[i] = {}
 
         days[i].enabled = dlg:add_check_box(DAY_NAMES[i], false, 1, row, 1, 1)
-        days[i].hour = dlg:add_text_input("00", 2, row, 1, 1)
-        dlg:add_label(":", 3, row, 1, 1)
-        days[i].minute = dlg:add_text_input("00", 4, row, 1, 1)
-        days[i].info = dlg:add_button("No files", make_show_callback(i), 5, row, 1, 1)
-        dlg:add_button("Browse", make_browse_callback(i), 6, row, 1, 1)
+        days[i].info = dlg:add_button("Show files", make_show_callback(i), 2, row, 2, 1)
+        dlg:add_button("Browse", make_browse_callback(i), 4, row, 1, 1)
     end
 
     -- Row 11: File list
-    file_list = dlg:add_list(1, 11, 6, 1)
+    file_list = dlg:add_list(1, 11, 4, 1)
 
-    -- Row 12: Status + action buttons
-    status_label = dlg:add_label(
-        "Ready. Browse to select files, then Save.",
-        1, 12, 4, 1)
-    dlg:add_button("Cancel", click_cancel, 5, 12, 1, 1)
-    dlg:add_button("Save", click_save, 6, 12, 1, 1)
+    -- Row 12: Reorder buttons
+    dlg:add_button("Move Up", click_move_up, 1, 12, 1, 1)
+    dlg:add_button("Move Down", click_move_down, 2, 12, 1, 1)
+    dlg:add_button("Remove", click_remove, 3, 12, 2, 1)
+
+    -- Row 13: Status + action buttons
+    status_label = dlg:add_label("Ready. Browse to select files, then Save.",
+        1, 13, 2, 1)
+    dlg:add_button("Cancel", click_cancel, 3, 13, 1, 1)
+    dlg:add_button("Save", click_save, 4, 13, 1, 1)
 
     dlg:show()
 end
@@ -330,8 +369,8 @@ end
 ---------------------------------------------------------------------------
 -- Core operations
 ---------------------------------------------------------------------------
-function show_files(day_index)
-    sync_if_same_time()
+function refresh_file_list(day_index, highlight_idx)
+    viewing_day = day_index
     local files = selected_files[day_index]
     file_list:clear()
 
@@ -339,12 +378,103 @@ function show_files(day_index)
         status_label:set_text(DAY_NAMES[day_index] .. ": No files selected")
     else
         for idx, filepath in ipairs(files) do
-            file_list:add_value(basename(filepath), idx)
+            file_list:add_value(idx .. ". " .. basename(filepath), idx)
         end
         status_label:set_text(DAY_NAMES[day_index] .. ": " .. #files .. " file(s)")
     end
-
     dlg:update()
+end
+
+function load_browse_result(day_index)
+    local tmp_dir = vlc.config.userdatadir() .. "/scheduler"
+    local tmp_unix = tmp_dir .. "/browse_tmp.txt"
+
+    local f = vlc.io.open(tmp_unix, "r")
+    if not f then return false end
+
+    local files = {}
+    while true do
+        local line = f:read("*l")
+        if not line then break end
+        line = string.match(line, "^%s*(.-)%s*$")
+        -- Skip BOM if present
+        if string.byte(line, 1) == 239 and string.byte(line, 2) == 187
+           and string.byte(line, 3) == 191 then
+            line = string.sub(line, 4)
+            line = string.match(line, "^%s*(.-)%s*$")
+        end
+        if line ~= "" then
+            table.insert(files, line)
+        end
+    end
+    f:close()
+    os.remove(tmp_unix)
+
+    if #files > 0 then
+        selected_files[day_index] = files
+        refresh_file_list(day_index)
+        status_label:set_text(DAY_NAMES[day_index] .. ": Selected " .. #files .. " file(s)")
+        dlg:update()
+        return true
+    end
+    return false
+end
+
+function try_load_pending()
+    if not pending_browse_day then return false end
+    if load_browse_result(pending_browse_day) then
+        local day = pending_browse_day
+        pending_browse_day = nil
+        return true, day
+    end
+    return false
+end
+
+function show_files(day_index)
+    -- Check if there's a pending browse result
+    local loaded, loaded_day = try_load_pending()
+    if loaded and loaded_day == day_index then return end
+    refresh_file_list(day_index)
+end
+
+function get_selected_index()
+    local selection = file_list:get_selection()
+    if not selection then return nil end
+    for index, _ in pairs(selection) do
+        return index
+    end
+    return nil
+end
+
+function click_move_up()
+    try_load_pending()
+    if not viewing_day then return end
+    local sel = get_selected_index()
+    local files = selected_files[viewing_day]
+    if not sel or not files or sel <= 1 then return end
+    files[sel], files[sel - 1] = files[sel - 1], files[sel]
+    refresh_file_list(viewing_day)
+end
+
+function click_move_down()
+    try_load_pending()
+    if not viewing_day then return end
+    local sel = get_selected_index()
+    local files = selected_files[viewing_day]
+    if not sel or not files or sel >= #files then return end
+    files[sel], files[sel + 1] = files[sel + 1], files[sel]
+    refresh_file_list(viewing_day)
+end
+
+function click_remove()
+    try_load_pending()
+    if not viewing_day then return end
+    local sel = get_selected_index()
+    local files = selected_files[viewing_day]
+    if not sel or not files or sel > #files then return end
+    table.remove(files, sel)
+    -- button label stays "Show files"
+    refresh_file_list(viewing_day)
 end
 
 function write_m3u(files, output_path)
@@ -368,23 +498,68 @@ function write_m3u(files, output_path)
 end
 
 function ensure_scheduler_autostart(conf_path)
-    -- Set in-memory config so VLC persists it to vlcrc on exit.
-    -- This is the reliable approach: VLC overwrites vlcrc on exit
-    -- from memory, so direct file edits get lost.
+    -- 1. Set in-memory config so VLC persists it to vlcrc on clean exit
     pcall(function()
         local current = vlc.config.get("extraintf") or ""
         if not string.find(current, "scheduler") then
+            local sep = (OS == "windows") and ";" or ":"
             if current == "" then
                 vlc.config.set("extraintf", "scheduler")
             else
-                vlc.config.set("extraintf", current .. ":scheduler")
+                vlc.config.set("extraintf", current .. sep .. "scheduler")
             end
         end
     end)
 
-    -- Also set scheduler-config (only works if C plugin is loaded)
     pcall(function()
         vlc.config.set("scheduler-config", conf_path)
+    end)
+
+    pcall(function()
+        vlc.config.set("scheduler-fullscreen", true)
+    end)
+
+    -- 2. Also directly patch vlcrc file as backup (in case VLC doesn't
+    --    exit cleanly, the in-memory config never gets written)
+    pcall(function()
+        local vlcrc_path = vlc.config.userdatadir() .. "/vlcrc"
+        local f = vlc.io.open(vlcrc_path, "r")
+        if not f then return end
+
+        local lines = {}
+        local found_extraintf = false
+        local already_set = false
+        while true do
+            local line = f:read("*l")
+            if not line then break end
+            -- Check if this is the extraintf line
+            if string.match(line, "^#?extraintf=") then
+                found_extraintf = true
+                local value = string.match(line, "^#?extraintf=(.*)$") or ""
+                if string.find(value, "scheduler") then
+                    already_set = true
+                    table.insert(lines, "extraintf=" .. value)
+                elseif value == "" then
+                    table.insert(lines, "extraintf=scheduler")
+                else
+                    local sep = (OS == "windows") and ";" or ":"
+                    table.insert(lines, "extraintf=" .. value .. sep .. "scheduler")
+                end
+            else
+                table.insert(lines, line)
+            end
+        end
+        f:close()
+
+        if already_set then return end
+
+        local fw = vlc.io.open(vlcrc_path, "w")
+        if not fw then return end
+        for _, l in ipairs(lines) do
+            fw:write(l .. "\n")
+        end
+        fw:close()
+        dbg("ensure_scheduler_autostart() patched vlcrc")
     end)
 end
 
@@ -393,25 +568,15 @@ function click_cancel()
 end
 
 function click_save()
-    sync_if_same_time()
     local config_dir = get_config_dir()
     local conf_lines = {}
     local errors = {}
     local count = 0
 
-    local use_same_time = same_time_cb:get_checked()
     local shared_h, shared_m = parse_time(same_hour, same_minute)
 
     for i = 1, 7 do
         if days[i].enabled:get_checked() then
-            local hour_id, min_id
-            if use_same_time then
-                hour_id = shared_h
-                min_id = shared_m
-            else
-                hour_id, min_id = parse_time(days[i].hour, days[i].minute)
-            end
-
             if #selected_files[i] == 0 then
                 table.insert(errors, DAY_NAMES[i] .. ": no files selected")
             else
@@ -420,7 +585,7 @@ function click_save()
 
                 if ok then
                     local line = string.format("%s  %02d:%02d  %s",
-                        DAY_ABBREVS[i], hour_id, min_id, m3u_path)
+                        DAY_ABBREVS[i], shared_h, shared_m, m3u_path)
                     table.insert(conf_lines, line)
                     count = count + 1
                 else
@@ -485,9 +650,7 @@ function click_load()
     -- Reset all days
     for i = 1, 7 do
         days[i].enabled:set_checked(false)
-        days[i].hour:set_text("00")
-        days[i].minute:set_text("00")
-        days[i].info:set_text("No files")
+        days[i].info:set_text("Show files")
         selected_files[i] = {}
     end
 
@@ -496,8 +659,6 @@ function click_load()
         THU = 5, FRI = 6, SAT = 7
     }
 
-    local all_hours = {}
-    local all_mins = {}
     local entries = {}
 
     while true do
@@ -515,27 +676,15 @@ function click_load()
                     minute = tonumber(minute),
                     path = path
                 })
-                table.insert(all_hours, tonumber(hour))
-                table.insert(all_mins, tonumber(minute))
             end
         end
     end
     f:close()
 
-    -- Detect if all entries use the same time
-    local all_same = #entries > 1
-    for i = 2, #all_hours do
-        if all_hours[i] ~= all_hours[1] or all_mins[i] ~= all_mins[1] then
-            all_same = false
-            break
-        end
-    end
-    if all_same and #entries > 0 then
-        same_time_cb:set_checked(true)
-        same_hour:set_text(string.format("%02d", all_hours[1]))
-        same_minute:set_text(string.format("%02d", all_mins[1]))
-    else
-        same_time_cb:set_checked(false)
+    -- Load shared time from first entry
+    if #entries > 0 then
+        same_hour:set_text(string.format("%02d", entries[1].hour))
+        same_minute:set_text(string.format("%02d", entries[1].minute))
     end
 
     -- Apply entries
@@ -544,15 +693,10 @@ function click_load()
         local idx = day_map[entry.day]
         if idx then
             days[idx].enabled:set_checked(true)
-            days[idx].hour:set_text(string.format("%02d", entry.hour))
-            days[idx].minute:set_text(string.format("%02d", entry.minute))
 
             local files = extract_files_from_m3u(entry.path)
             if files and #files > 0 then
                 selected_files[idx] = files
-                days[idx].info:set_text(#files .. " file(s)")
-            else
-                days[idx].info:set_text(entry.path)
             end
             count = count + 1
         end

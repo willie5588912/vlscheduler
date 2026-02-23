@@ -39,11 +39,40 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <sys/stat.h>
+
+#ifdef _WIN32
+# include <sys/types.h>
+# include <sys/stat.h>
+# if !defined(__MINGW32__) && !defined(__MINGW64__)
+#  define stat    _stat       /* MSVC: struct stat -> struct _stat */
+# endif
+# define strncasecmp _strnicmp
+#else
+# include <sys/stat.h>
+#endif
 
 /* For out-of-tree builds, N_() may not be available */
 #ifndef N_
 # define N_(str) (str)
+#endif
+
+/* Portable asprintf for platforms that lack it (e.g. MSVC on Windows) */
+#if defined(_WIN32)
+#include <stdarg.h>
+static int asprintf(char **strp, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int len = _vscprintf(fmt, ap);
+    va_end(ap);
+    if (len < 0) { *strp = NULL; return -1; }
+    *strp = (char *)malloc((size_t)len + 1);
+    if (*strp == NULL) return -1;
+    va_start(ap, fmt);
+    len = vsnprintf(*strp, (size_t)len + 1, fmt, ap);
+    va_end(ap);
+    return len;
+}
 #endif
 
 #define VLC_MODULE_LICENSE VLC_LICENSE_GPL_2_PLUS
@@ -569,7 +598,7 @@ vlc_module_begin()
                N_("Path to the schedule configuration file. "
                   "Format: DAY HH:MM /path/to/playlist.m3u"),
                false)
-    add_bool("scheduler-fullscreen", false,
+    add_bool("scheduler-fullscreen", true,
              N_("Fullscreen on schedule"),
              N_("Switch to fullscreen when a scheduled playlist starts"),
              false)

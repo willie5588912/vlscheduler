@@ -51,6 +51,19 @@ make installer      # generate self-contained .cmd installer
 | C plugin | `libscheduler_plugin.dll` | Engine that triggers playback at scheduled times |
 | Installer builder | `build_installer.sh` | Generates a single `.cmd` installer with embedded binaries |
 
+## Changelog
+
+### 0.0.1 (2026-02-24)
+
+- Initial Windows release
+- Weekly schedule GUI with shared time setting for all days
+- Native Windows file picker (non-blocking, supports Chinese filenames)
+- File reorder (Move Up / Move Down) and Remove buttons
+- Fullscreen on scheduled playback
+- Self-contained `.cmd` installer with GUI (Install / Uninstall)
+- Auto-start scheduler engine on VLC launch
+- Config hot-reload without VLC restart
+
 ## License
 
 [GPL v2+](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)

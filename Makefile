@@ -45,7 +45,7 @@ else
 	@echo "ERROR: VLC not found. Set VLC_DIR=/path/to/VLC" && exit 1
 endif
 
-.PHONY: windows linux macos all clean install uninstall package
+.PHONY: windows linux macos all clean install uninstall package installer
 
 windows: export TMPDIR ?= /tmp
 windows: export TMP ?= /tmp
@@ -136,7 +136,12 @@ package:
 	@rm -rf vlscheduler-$(VERSION)
 	@echo "Created vlscheduler-$(VERSION)-$(PLATFORM_TAG).zip"
 
+INSTALLER_OUTPUT = vlscheduler-$(VERSION)-install.cmd
+
+installer: windows
+	bash build_installer.sh $(WIN_OUTPUT) vlscheduler.lua $(INSTALLER_OUTPUT)
+
 clean:
 	rm -f $(WIN_OUTPUT) $(LINUX_OUTPUT) $(MACOS_OUTPUT)
 	rm -f libvlccore.a libvlccore.def
-	rm -f vlscheduler-*.zip
+	rm -f vlscheduler-*.zip vlscheduler-*-install.cmd

@@ -46,21 +46,13 @@ local days = {}          -- [1..7], each: {enabled, hour, minute, info}
 local selected_files = {} -- [1..7], each: table of absolute file paths
 local status_label = nil
 local file_list = nil
+local viewing_day = nil  -- which day's files are shown in the list
 
 -- "Same time" widgets
 local same_time_cb = nil
 local same_hour = nil
 local same_minute = nil
 
--- Windows folder browser state
-local browse_mode = false
-local browse_day = nil
-local current_path = ""
-local browser_entries = {}  -- {name, is_dir, full_path} indexed by list id
-local path_input = nil      -- text input showing current path
-local btn_up = nil
-local btn_open = nil
-local btn_use = nil
 
 ---------------------------------------------------------------------------
 -- Extension lifecycle
@@ -237,177 +229,6 @@ function browse_files_linux(day_index)
 end
 
 ---------------------------------------------------------------------------
--- Windows folder browser
----------------------------------------------------------------------------
-function is_directory(path)
-    local ok, entries = pcall(vlc.net.opendir, path)
-    return ok and entries ~= nil
-end
-
-function get_parent_path(path)
-    -- Remove trailing separator
-    path = string.gsub(path, "[/\\]+$", "")
-    local parent = string.match(path, "^(.*)[/\\]")
-    if not parent or parent == "" then
-        -- We're at a drive root like C:
-        return nil
-    end
-    -- If parent is just "C:", add backslash
-    if string.match(parent, "^%a:$") then
-        return parent .. "\\"
-    end
-    return parent
-end
-
-function refresh_browser(path)
-    current_path = path
-    browser_entries = {}
-    file_list:clear()
-
-    if path_input then
-        path_input:set_text(path)
-    end
-
-    local ok, entries = pcall(vlc.net.opendir, path)
-    if not ok or not entries then
-        status_label:set_text("Cannot read: " .. path)
-        dlg:update()
-        return
-    end
-
-    table.sort(entries, function(a, b)
-        return string.lower(a) < string.lower(b)
-    end)
-
-    local id = 1
-    local sep = (OS == "windows") and "\\" or "/"
-    -- Ensure path ends with separator
-    if string.sub(path, -1) ~= sep and string.sub(path, -1) ~= "/" then
-        path = path .. sep
-    end
-
-    -- Add directories first, then media files
-    local dirs = {}
-    local media = {}
-    for _, name in ipairs(entries) do
-        if name ~= "." and name ~= ".." then
-            local full = path .. name
-            if is_directory(full) then
-                table.insert(dirs, {name = name, full_path = full})
-            elseif is_media_file(name) then
-                table.insert(media, {name = name, full_path = full})
-            end
-        end
-    end
-
-    for _, d in ipairs(dirs) do
-        file_list:add_value("[DIR]  " .. d.name, id)
-        browser_entries[id] = {name = d.name, is_dir = true, full_path = d.full_path}
-        id = id + 1
-    end
-    for _, m in ipairs(media) do
-        file_list:add_value("       " .. m.name, id)
-        browser_entries[id] = {name = m.name, is_dir = false, full_path = m.full_path}
-        id = id + 1
-    end
-
-    local media_count = #media
-    status_label:set_text("Browsing for " .. DAY_NAMES[browse_day]
-        .. " | " .. #dirs .. " folder(s), " .. media_count .. " media file(s)")
-    dlg:update()
-end
-
-function enter_browse_mode(day_index)
-    browse_mode = true
-    browse_day = day_index
-    local start_path = "C:\\"
-    if OS ~= "windows" then
-        start_path = "/"
-    end
-    refresh_browser(start_path)
-end
-
-function exit_browse_mode()
-    browse_mode = false
-    browse_day = nil
-    browser_entries = {}
-    file_list:clear()
-    if path_input then
-        path_input:set_text("")
-    end
-    status_label:set_text("Ready.")
-    dlg:update()
-end
-
-function click_browser_open()
-    if not browse_mode then return end
-    local sel = file_list:get_value()
-    if not sel or not browser_entries[sel] then
-        status_label:set_text("Select a [DIR] folder from the list, then click Open.")
-        dlg:update()
-        return
-    end
-    local entry = browser_entries[sel]
-    if entry.is_dir then
-        refresh_browser(entry.full_path)
-    else
-        status_label:set_text("'" .. entry.name .. "' is a file, not a folder. Select a [DIR] entry.")
-        dlg:update()
-    end
-end
-
-function click_browser_up()
-    if not browse_mode then return end
-    local parent = get_parent_path(current_path)
-    if parent then
-        refresh_browser(parent)
-    else
-        status_label:set_text("Already at root.")
-        dlg:update()
-    end
-end
-
-function click_browser_go()
-    if not browse_mode then return end
-    local path = path_input:get_text()
-    if path and path ~= "" then
-        refresh_browser(path)
-    end
-end
-
-function click_use_files()
-    if not browse_mode or not browse_day then return end
-    -- Collect all media files in current directory
-    local files = {}
-    for _, entry in pairs(browser_entries) do
-        if not entry.is_dir then
-            table.insert(files, entry.full_path)
-        end
-    end
-    table.sort(files)
-
-    if #files > 0 then
-        selected_files[browse_day] = files
-        days[browse_day].info:set_text(#files .. " file(s)")
-        status_label:set_text(DAY_NAMES[browse_day] .. ": Selected "
-            .. #files .. " media file(s) from " .. current_path)
-    else
-        status_label:set_text("No media files in " .. current_path)
-    end
-
-    exit_browse_mode()
-
-    -- Show the selected files in the list
-    if #files > 0 then
-        file_list:clear()
-        for idx, filepath in ipairs(files) do
-            file_list:add_value(basename(filepath), idx)
-        end
-    end
-    dlg:update()
-end
-
----------------------------------------------------------------------------
 -- browse_files: entry point for all platforms
 ---------------------------------------------------------------------------
 function browse_files(day_index)
@@ -463,10 +284,7 @@ function browse_files(day_index)
         if #files > 0 then
             selected_files[day_index] = files
             days[day_index].info:set_text(#files .. " file(s)")
-            file_list:clear()
-            for idx, filepath in ipairs(files) do
-                file_list:add_value(basename(filepath), idx)
-            end
+            refresh_file_list(day_index)
             status_label:set_text(DAY_NAMES[day_index] .. ": Selected " .. #files .. " file(s)")
         end
         dlg:update()
@@ -506,12 +324,7 @@ function browse_files(day_index)
     if #files > 0 then
         selected_files[day_index] = files
         days[day_index].info:set_text(#files .. " file(s)")
-
-        file_list:clear()
-        for idx, filepath in ipairs(files) do
-            file_list:add_value(basename(filepath), idx)
-        end
-
+        refresh_file_list(day_index)
         status_label:set_text(DAY_NAMES[day_index] .. ": Selected "
                               .. #files .. " file(s)")
     end
@@ -571,32 +384,19 @@ function create_dialog()
         dlg:add_button("Browse", make_browse_callback(i), 6, row, 1, 1)
     end
 
-    -- Row 11: Browser navigation bar (Windows only)
-    if OS == "windows" then
-        path_input = dlg:add_text_input("C:\\", 1, 11, 3, 1)
-        dlg:add_button("Go", click_browser_go, 4, 11, 1, 1)
-        btn_up = dlg:add_button("Up", click_browser_up, 5, 11, 1, 1)
-        btn_open = dlg:add_button("Open", click_browser_open, 6, 11, 1, 1)
-    end
+    -- Row 11: File list
+    file_list = dlg:add_list(1, 11, 6, 1)
 
-    -- Row 12: File list
-    local list_row = (OS == "windows") and 12 or 11
-    file_list = dlg:add_list(1, list_row, 6, 1)
+    -- Row 12: Reorder buttons
+    dlg:add_button("Move Up", click_move_up, 1, 12, 2, 1)
+    dlg:add_button("Move Down", click_move_down, 3, 12, 2, 1)
+    dlg:add_button("Remove", click_remove, 5, 12, 2, 1)
 
     -- Row 13: Status + action buttons
-    local status_row = list_row + 1
-    if OS == "windows" then
-        status_label = dlg:add_label("Click Browse to select files.", 1, status_row, 2, 1)
-        btn_use = dlg:add_button("Use Files", click_use_files, 3, status_row, 1, 1)
-        dlg:add_button("Cancel", click_cancel, 5, status_row, 1, 1)
-        dlg:add_button("Save", click_save, 6, status_row, 1, 1)
-    else
-        status_label = dlg:add_label(
-            "Ready. Browse to select files, then Save.",
-            1, status_row, 4, 1)
-        dlg:add_button("Cancel", click_cancel, 5, status_row, 1, 1)
-        dlg:add_button("Save", click_save, 6, status_row, 1, 1)
-    end
+    status_label = dlg:add_label("Ready. Browse to select files, then Save.",
+        1, 13, 4, 1)
+    dlg:add_button("Cancel", click_cancel, 5, 13, 1, 1)
+    dlg:add_button("Save", click_save, 6, 13, 1, 1)
 
     dlg:show()
 end
@@ -604,8 +404,8 @@ end
 ---------------------------------------------------------------------------
 -- Core operations
 ---------------------------------------------------------------------------
-function show_files(day_index)
-    sync_if_same_time()
+function refresh_file_list(day_index, highlight_idx)
+    viewing_day = day_index
     local files = selected_files[day_index]
     file_list:clear()
 
@@ -613,12 +413,53 @@ function show_files(day_index)
         status_label:set_text(DAY_NAMES[day_index] .. ": No files selected")
     else
         for idx, filepath in ipairs(files) do
-            file_list:add_value(basename(filepath), idx)
+            file_list:add_value(idx .. ". " .. basename(filepath), idx)
         end
         status_label:set_text(DAY_NAMES[day_index] .. ": " .. #files .. " file(s)")
     end
-
     dlg:update()
+end
+
+function show_files(day_index)
+    sync_if_same_time()
+    refresh_file_list(day_index)
+end
+
+function get_selected_index()
+    local selection = file_list:get_selection()
+    if not selection then return nil end
+    for index, _ in pairs(selection) do
+        return index
+    end
+    return nil
+end
+
+function click_move_up()
+    if not viewing_day then return end
+    local sel = get_selected_index()
+    local files = selected_files[viewing_day]
+    if not sel or not files or sel <= 1 then return end
+    files[sel], files[sel - 1] = files[sel - 1], files[sel]
+    refresh_file_list(viewing_day)
+end
+
+function click_move_down()
+    if not viewing_day then return end
+    local sel = get_selected_index()
+    local files = selected_files[viewing_day]
+    if not sel or not files or sel >= #files then return end
+    files[sel], files[sel + 1] = files[sel + 1], files[sel]
+    refresh_file_list(viewing_day)
+end
+
+function click_remove()
+    if not viewing_day then return end
+    local sel = get_selected_index()
+    local files = selected_files[viewing_day]
+    if not sel or not files or sel > #files then return end
+    table.remove(files, sel)
+    days[viewing_day].info:set_text(#files > 0 and (#files .. " file(s)") or "No files")
+    refresh_file_list(viewing_day)
 end
 
 function write_m3u(files, output_path)

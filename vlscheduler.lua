@@ -237,8 +237,13 @@ function browse_files(day_index)
 
     if OS == "windows" then
         dbg("browse_files() windows file picker")
-        -- Write selected files to a temp file in UTF-8, then read it
-        local tmp = os.tmpname()
+        -- Use VLC's config dir for temp file (reliable cross-path)
+        local tmp_dir = vlc.config.userdatadir() .. "/scheduler"
+        local tmp_unix = tmp_dir .. "/browse_tmp.txt"
+        local tmp_win = string.gsub(tmp_unix, "/", "\\")
+        -- Remove stale temp file
+        os.remove(tmp_unix)
+
         local cmd = 'powershell -NoProfile -WindowStyle Hidden -Command "'
             .. "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"
             .. "Add-Type -AssemblyName System.Windows.Forms;"
@@ -249,16 +254,15 @@ function browse_files(day_index)
             .. "$f.Title = 'Select media files for " .. DAY_NAMES[day_index] .. "';"
             .. "if ($f.ShowDialog() -eq 'OK') {"
             .. " $f.FileNames | Out-File -Encoding utf8 -FilePath '"
-            .. string.gsub(tmp, "/", "\\") .. "'"
+            .. tmp_win .. "'"
             .. "}"
             .. '"'
         os.execute(cmd)
-        dbg("browse_files() command finished, reading temp file: " .. tmp)
+        dbg("browse_files() command finished, reading temp file: " .. tmp_unix)
 
-        local f = vlc.io.open(tmp, "r")
+        local f = vlc.io.open(tmp_unix, "r")
         if not f then
             dbg("browse_files() no temp file (user cancelled?)")
-            os.remove(tmp)
             return
         end
 
@@ -278,7 +282,7 @@ function browse_files(day_index)
             end
         end
         f:close()
-        os.remove(tmp)
+        os.remove(tmp_unix)
         dbg("browse_files() parsed " .. #files .. " files")
 
         if #files > 0 then

@@ -25,8 +25,8 @@ COMMON_CFLAGS = -Wall -Wextra -O2 -fPIC \
 # ---------------------------------------------------------------------------
 # Windows (MinGW / MSYS2)
 # ---------------------------------------------------------------------------
-WIN_OUTPUT = $(PLUGIN_NAME)_plugin.dll
-WIN_LDFLAGS = -shared -L. -lvlccore
+WIN_OUTPUT = lib$(PLUGIN_NAME)_plugin.dll
+WIN_LDFLAGS = -shared -static-libgcc -L. -lvlccore
 
 VLC_DIR ?= $(shell \
   for d in \

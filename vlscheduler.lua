@@ -40,6 +40,7 @@ local DAY_FILENAMES = {
 ---------------------------------------------------------------------------
 -- State
 ---------------------------------------------------------------------------
+local OS = nil
 local dlg = nil
 local days = {}          -- [1..7], each: {enabled, hour, minute, info}
 local selected_files = {} -- [1..7], each: table of absolute file paths
@@ -50,6 +51,16 @@ local file_list = nil
 local same_time_cb = nil
 local same_hour = nil
 local same_minute = nil
+
+-- Windows folder browser state
+local browse_mode = false
+local browse_day = nil
+local current_path = ""
+local browser_entries = {}  -- {name, is_dir, full_path} indexed by list id
+local path_input = nil      -- text input showing current path
+local btn_up = nil
+local btn_open = nil
+local btn_use = nil
 
 ---------------------------------------------------------------------------
 -- Extension lifecycle
@@ -70,11 +81,13 @@ end
 
 function activate()
     OS = detect_os()
+    dbg("activate() OS=" .. tostring(OS))
     for i = 1, 7 do
         selected_files[i] = {}
     end
     create_dialog()
     click_load()
+    dbg("activate() done")
 end
 
 function deactivate()
@@ -101,18 +114,30 @@ end
 ---------------------------------------------------------------------------
 -- Platform detection
 ---------------------------------------------------------------------------
-local OS = nil
-
 function detect_os()
-    -- VLC's Lua sandbox doesn't expose 'package'; probe via config dir
-    local dir = vlc.config.userdatadir() or ""
-    if string.find(dir, "\\") or string.find(dir, ":%\\") or string.find(dir, ":/") then
+    -- Use VLC's native platform flag when available
+    if vlc.win then
         return "windows"
     end
+    -- Fallback: probe via config dir path
+    local dir = vlc.config.userdatadir() or ""
     if string.find(dir, "/Library/") or string.find(dir, "org%.videolan%.vlc") then
         return "macos"
     end
     return "linux"
+end
+
+---------------------------------------------------------------------------
+-- Debug logging (writes + flushes to file immediately)
+---------------------------------------------------------------------------
+local DEBUG_LOG = "C:\\Users\\admin\\vlscheduler-debug.log"
+
+function dbg(msg)
+    local f = vlc.io.open(DEBUG_LOG, "a")
+    if f then
+        f:write(os.date("%H:%M:%S") .. " " .. msg .. "\n")
+        f:close()
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -211,26 +236,247 @@ function browse_files_linux(day_index)
         .. '2>/dev/null'
 end
 
-function browse_files_windows(day_index)
-    -- PowerShell file dialog
-    return 'powershell -NoProfile -Command "'
-        .. '[System.Reflection.Assembly]::LoadWithPartialName(\\"System.Windows.Forms\\") | Out-Null; '
-        .. '$d = New-Object System.Windows.Forms.OpenFileDialog; '
-        .. '$d.Title = \\"Select media files for ' .. DAY_NAMES[day_index] .. '\\"; '
-        .. '$d.Filter = \\"Media files|*.mp4;*.mkv;*.avi;*.mov;*.m4v;*.ts;*.flv;*.wmv;*.mpg;*.mpeg;*.mp3;*.flac;*.wav;*.aiff;*.m4a;*.ogg\\"; '
-        .. '$d.Multiselect = $true; '
-        .. 'if ($d.ShowDialog() -eq \\"OK\\") { $d.FileNames -join [char]10 }'
-        .. '"'
+---------------------------------------------------------------------------
+-- Windows folder browser
+---------------------------------------------------------------------------
+function is_directory(path)
+    local ok, entries = pcall(vlc.net.opendir, path)
+    return ok and entries ~= nil
 end
 
+function get_parent_path(path)
+    -- Remove trailing separator
+    path = string.gsub(path, "[/\\]+$", "")
+    local parent = string.match(path, "^(.*)[/\\]")
+    if not parent or parent == "" then
+        -- We're at a drive root like C:
+        return nil
+    end
+    -- If parent is just "C:", add backslash
+    if string.match(parent, "^%a:$") then
+        return parent .. "\\"
+    end
+    return parent
+end
+
+function refresh_browser(path)
+    current_path = path
+    browser_entries = {}
+    file_list:clear()
+
+    if path_input then
+        path_input:set_text(path)
+    end
+
+    local ok, entries = pcall(vlc.net.opendir, path)
+    if not ok or not entries then
+        status_label:set_text("Cannot read: " .. path)
+        dlg:update()
+        return
+    end
+
+    table.sort(entries, function(a, b)
+        return string.lower(a) < string.lower(b)
+    end)
+
+    local id = 1
+    local sep = (OS == "windows") and "\\" or "/"
+    -- Ensure path ends with separator
+    if string.sub(path, -1) ~= sep and string.sub(path, -1) ~= "/" then
+        path = path .. sep
+    end
+
+    -- Add directories first, then media files
+    local dirs = {}
+    local media = {}
+    for _, name in ipairs(entries) do
+        if name ~= "." and name ~= ".." then
+            local full = path .. name
+            if is_directory(full) then
+                table.insert(dirs, {name = name, full_path = full})
+            elseif is_media_file(name) then
+                table.insert(media, {name = name, full_path = full})
+            end
+        end
+    end
+
+    for _, d in ipairs(dirs) do
+        file_list:add_value("[DIR]  " .. d.name, id)
+        browser_entries[id] = {name = d.name, is_dir = true, full_path = d.full_path}
+        id = id + 1
+    end
+    for _, m in ipairs(media) do
+        file_list:add_value("       " .. m.name, id)
+        browser_entries[id] = {name = m.name, is_dir = false, full_path = m.full_path}
+        id = id + 1
+    end
+
+    local media_count = #media
+    status_label:set_text("Browsing for " .. DAY_NAMES[browse_day]
+        .. " | " .. #dirs .. " folder(s), " .. media_count .. " media file(s)")
+    dlg:update()
+end
+
+function enter_browse_mode(day_index)
+    browse_mode = true
+    browse_day = day_index
+    local start_path = "C:\\"
+    if OS ~= "windows" then
+        start_path = "/"
+    end
+    refresh_browser(start_path)
+end
+
+function exit_browse_mode()
+    browse_mode = false
+    browse_day = nil
+    browser_entries = {}
+    file_list:clear()
+    if path_input then
+        path_input:set_text("")
+    end
+    status_label:set_text("Ready.")
+    dlg:update()
+end
+
+function click_browser_open()
+    if not browse_mode then return end
+    local sel = file_list:get_value()
+    if not sel or not browser_entries[sel] then
+        status_label:set_text("Select a [DIR] folder from the list, then click Open.")
+        dlg:update()
+        return
+    end
+    local entry = browser_entries[sel]
+    if entry.is_dir then
+        refresh_browser(entry.full_path)
+    else
+        status_label:set_text("'" .. entry.name .. "' is a file, not a folder. Select a [DIR] entry.")
+        dlg:update()
+    end
+end
+
+function click_browser_up()
+    if not browse_mode then return end
+    local parent = get_parent_path(current_path)
+    if parent then
+        refresh_browser(parent)
+    else
+        status_label:set_text("Already at root.")
+        dlg:update()
+    end
+end
+
+function click_browser_go()
+    if not browse_mode then return end
+    local path = path_input:get_text()
+    if path and path ~= "" then
+        refresh_browser(path)
+    end
+end
+
+function click_use_files()
+    if not browse_mode or not browse_day then return end
+    -- Collect all media files in current directory
+    local files = {}
+    for _, entry in pairs(browser_entries) do
+        if not entry.is_dir then
+            table.insert(files, entry.full_path)
+        end
+    end
+    table.sort(files)
+
+    if #files > 0 then
+        selected_files[browse_day] = files
+        days[browse_day].info:set_text(#files .. " file(s)")
+        status_label:set_text(DAY_NAMES[browse_day] .. ": Selected "
+            .. #files .. " media file(s) from " .. current_path)
+    else
+        status_label:set_text("No media files in " .. current_path)
+    end
+
+    exit_browse_mode()
+
+    -- Show the selected files in the list
+    if #files > 0 then
+        file_list:clear()
+        for idx, filepath in ipairs(files) do
+            file_list:add_value(basename(filepath), idx)
+        end
+    end
+    dlg:update()
+end
+
+---------------------------------------------------------------------------
+-- browse_files: entry point for all platforms
+---------------------------------------------------------------------------
 function browse_files(day_index)
+    dbg("browse_files() day=" .. tostring(day_index) .. " OS=" .. tostring(OS))
     sync_if_same_time()
+
+    if OS == "windows" then
+        dbg("browse_files() windows file picker")
+        -- Write selected files to a temp file in UTF-8, then read it
+        local tmp = os.tmpname()
+        local cmd = 'powershell -NoProfile -WindowStyle Hidden -Command "'
+            .. "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"
+            .. "Add-Type -AssemblyName System.Windows.Forms;"
+            .. "$f = New-Object System.Windows.Forms.OpenFileDialog;"
+            .. "$f.Multiselect = $true;"
+            .. "$f.Filter = 'Media files|*.mp4;*.mkv;*.avi;*.mov;*.m4v;*.ts;"
+            .. "*.flv;*.wmv;*.mpg;*.mpeg;*.mp3;*.flac;*.wav;*.aiff;*.m4a;*.ogg';"
+            .. "$f.Title = 'Select media files for " .. DAY_NAMES[day_index] .. "';"
+            .. "if ($f.ShowDialog() -eq 'OK') {"
+            .. " $f.FileNames | Out-File -Encoding utf8 -FilePath '"
+            .. string.gsub(tmp, "/", "\\") .. "'"
+            .. "}"
+            .. '"'
+        os.execute(cmd)
+        dbg("browse_files() command finished, reading temp file: " .. tmp)
+
+        local f = vlc.io.open(tmp, "r")
+        if not f then
+            dbg("browse_files() no temp file (user cancelled?)")
+            os.remove(tmp)
+            return
+        end
+
+        local files = {}
+        while true do
+            local line = f:read("*l")
+            if not line then break end
+            line = string.match(line, "^%s*(.-)%s*$")
+            -- Skip BOM if present
+            if string.byte(line, 1) == 239 and string.byte(line, 2) == 187
+               and string.byte(line, 3) == 191 then
+                line = string.sub(line, 4)
+                line = string.match(line, "^%s*(.-)%s*$")
+            end
+            if line ~= "" then
+                table.insert(files, line)
+            end
+        end
+        f:close()
+        os.remove(tmp)
+        dbg("browse_files() parsed " .. #files .. " files")
+
+        if #files > 0 then
+            selected_files[day_index] = files
+            days[day_index].info:set_text(#files .. " file(s)")
+            file_list:clear()
+            for idx, filepath in ipairs(files) do
+                file_list:add_value(basename(filepath), idx)
+            end
+            status_label:set_text(DAY_NAMES[day_index] .. ": Selected " .. #files .. " file(s)")
+        end
+        dlg:update()
+        dbg("browse_files() done")
+        return
+    end
 
     local cmd
     if OS == "macos" then
         cmd = browse_files_macos(day_index)
-    elseif OS == "windows" then
-        cmd = browse_files_windows(day_index)
     else
         cmd = browse_files_linux(day_index)
     end
@@ -284,7 +530,11 @@ end
 
 function make_browse_callback(day_index)
     return function()
-        browse_files(day_index)
+        local ok, err = pcall(browse_files, day_index)
+        if not ok then
+            status_label:set_text("Error: " .. tostring(err))
+            dlg:update()
+        end
     end
 end
 
@@ -321,15 +571,32 @@ function create_dialog()
         dlg:add_button("Browse", make_browse_callback(i), 6, row, 1, 1)
     end
 
-    -- Row 11: File list
-    file_list = dlg:add_list(1, 11, 6, 1)
+    -- Row 11: Browser navigation bar (Windows only)
+    if OS == "windows" then
+        path_input = dlg:add_text_input("C:\\", 1, 11, 3, 1)
+        dlg:add_button("Go", click_browser_go, 4, 11, 1, 1)
+        btn_up = dlg:add_button("Up", click_browser_up, 5, 11, 1, 1)
+        btn_open = dlg:add_button("Open", click_browser_open, 6, 11, 1, 1)
+    end
 
-    -- Row 12: Status + action buttons
-    status_label = dlg:add_label(
-        "Ready. Browse to select files, then Save.",
-        1, 12, 4, 1)
-    dlg:add_button("Cancel", click_cancel, 5, 12, 1, 1)
-    dlg:add_button("Save", click_save, 6, 12, 1, 1)
+    -- Row 12: File list
+    local list_row = (OS == "windows") and 12 or 11
+    file_list = dlg:add_list(1, list_row, 6, 1)
+
+    -- Row 13: Status + action buttons
+    local status_row = list_row + 1
+    if OS == "windows" then
+        status_label = dlg:add_label("Click Browse to select files.", 1, status_row, 2, 1)
+        btn_use = dlg:add_button("Use Files", click_use_files, 3, status_row, 1, 1)
+        dlg:add_button("Cancel", click_cancel, 5, status_row, 1, 1)
+        dlg:add_button("Save", click_save, 6, status_row, 1, 1)
+    else
+        status_label = dlg:add_label(
+            "Ready. Browse to select files, then Save.",
+            1, status_row, 4, 1)
+        dlg:add_button("Cancel", click_cancel, 5, status_row, 1, 1)
+        dlg:add_button("Save", click_save, 6, status_row, 1, 1)
+    end
 
     dlg:show()
 end
@@ -375,13 +642,10 @@ function write_m3u(files, output_path)
 end
 
 function ensure_scheduler_autostart(conf_path)
-    -- Set in-memory config so VLC persists it to vlcrc on exit.
-    -- This is the reliable approach: VLC overwrites vlcrc on exit
-    -- from memory, so direct file edits get lost.
+    -- 1. Set in-memory config so VLC persists it to vlcrc on clean exit
     pcall(function()
         local current = vlc.config.get("extraintf") or ""
         if not string.find(current, "scheduler") then
-            -- VLC uses ":" as separator on Unix, ";" on Windows
             local sep = (OS == "windows") and ";" or ":"
             if current == "" then
                 vlc.config.set("extraintf", "scheduler")
@@ -391,9 +655,51 @@ function ensure_scheduler_autostart(conf_path)
         end
     end)
 
-    -- Also set scheduler-config (only works if C plugin is loaded)
     pcall(function()
         vlc.config.set("scheduler-config", conf_path)
+    end)
+
+    -- 2. Also directly patch vlcrc file as backup (in case VLC doesn't
+    --    exit cleanly, the in-memory config never gets written)
+    pcall(function()
+        local vlcrc_path = vlc.config.userdatadir() .. "/vlcrc"
+        local f = vlc.io.open(vlcrc_path, "r")
+        if not f then return end
+
+        local lines = {}
+        local found_extraintf = false
+        local already_set = false
+        while true do
+            local line = f:read("*l")
+            if not line then break end
+            -- Check if this is the extraintf line
+            if string.match(line, "^#?extraintf=") then
+                found_extraintf = true
+                local value = string.match(line, "^#?extraintf=(.*)$") or ""
+                if string.find(value, "scheduler") then
+                    already_set = true
+                    table.insert(lines, "extraintf=" .. value)
+                elseif value == "" then
+                    table.insert(lines, "extraintf=scheduler")
+                else
+                    local sep = (OS == "windows") and ";" or ":"
+                    table.insert(lines, "extraintf=" .. value .. sep .. "scheduler")
+                end
+            else
+                table.insert(lines, line)
+            end
+        end
+        f:close()
+
+        if already_set then return end
+
+        local fw = vlc.io.open(vlcrc_path, "w")
+        if not fw then return end
+        for _, l in ipairs(lines) do
+            fw:write(l .. "\n")
+        end
+        fw:close()
+        dbg("ensure_scheduler_autostart() patched vlcrc")
     end)
 end
 

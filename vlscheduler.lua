@@ -295,7 +295,6 @@ function browse_files(day_index)
 
     if #files > 0 then
         selected_files[day_index] = files
-        days[day_index].info:set_text(#files .. " file(s)")
         refresh_file_list(day_index)
         status_label:set_text(DAY_NAMES[day_index] .. ": Selected "
                               .. #files .. " file(s)")
@@ -413,7 +412,6 @@ function load_browse_result(day_index)
 
     if #files > 0 then
         selected_files[day_index] = files
-        days[day_index].info:set_text(#files .. " file(s)")
         refresh_file_list(day_index)
         status_label:set_text(DAY_NAMES[day_index] .. ": Selected " .. #files .. " file(s)")
         dlg:update()
@@ -475,7 +473,7 @@ function click_remove()
     local files = selected_files[viewing_day]
     if not sel or not files or sel > #files then return end
     table.remove(files, sel)
-    days[viewing_day].info:set_text(#files > 0 and (#files .. " file(s)") or "Show files")
+    -- button label stays "Show files"
     refresh_file_list(viewing_day)
 end
 
@@ -699,9 +697,6 @@ function click_load()
             local files = extract_files_from_m3u(entry.path)
             if files and #files > 0 then
                 selected_files[idx] = files
-                days[idx].info:set_text(#files .. " file(s)")
-            else
-                days[idx].info:set_text(entry.path)
             end
             count = count + 1
         end

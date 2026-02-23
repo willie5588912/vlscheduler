@@ -38,8 +38,6 @@ test-video.mp4
 # macOS
 .DS_Store
 
-# Claude Code
-.claude/
 
 # Logs
 *.log

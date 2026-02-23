@@ -47,6 +47,7 @@ local selected_files = {} -- [1..7], each: table of absolute file paths
 local status_label = nil
 local file_list = nil
 local viewing_day = nil  -- which day's files are shown in the list
+local pending_browse_day = nil  -- day awaiting file picker result
 
 -- "Same time" widgets
 local same_time_cb = nil
@@ -235,8 +236,11 @@ function browse_files(day_index)
     dbg("browse_files() day=" .. tostring(day_index) .. " OS=" .. tostring(OS))
     sync_if_same_time()
 
+    -- Load any pending browse result first
+    try_load_pending()
+
     if OS == "windows" then
-        dbg("browse_files() windows file picker")
+        dbg("browse_files() windows file picker (async)")
         -- Use VLC's config dir for temp file (reliable cross-path)
         local tmp_dir = vlc.config.userdatadir() .. "/scheduler"
         local tmp_unix = tmp_dir .. "/browse_tmp.txt"
@@ -244,7 +248,11 @@ function browse_files(day_index)
         -- Remove stale temp file
         os.remove(tmp_unix)
 
-        local cmd = 'powershell -NoProfile -WindowStyle Hidden -Command "'
+        -- Store which day we're browsing for
+        pending_browse_day = day_index
+
+        -- Launch file picker asynchronously (non-blocking)
+        local cmd = 'start "" powershell -NoProfile -WindowStyle Hidden -Command "'
             .. "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"
             .. "Add-Type -AssemblyName System.Windows.Forms;"
             .. "$f = New-Object System.Windows.Forms.OpenFileDialog;"
@@ -252,47 +260,18 @@ function browse_files(day_index)
             .. "$f.Filter = 'Media files|*.mp4;*.mkv;*.avi;*.mov;*.m4v;*.ts;"
             .. "*.flv;*.wmv;*.mpg;*.mpeg;*.mp3;*.flac;*.wav;*.aiff;*.m4a;*.ogg';"
             .. "$f.Title = 'Select media files for " .. DAY_NAMES[day_index] .. "';"
-            .. "if ($f.ShowDialog() -eq 'OK') {"
+            .. "$owner = New-Object System.Windows.Forms.Form;"
+            .. "$owner.TopMost = $true;"
+            .. "if ($f.ShowDialog($owner) -eq 'OK') {"
             .. " $f.FileNames | Out-File -Encoding utf8 -FilePath '"
             .. tmp_win .. "'"
             .. "}"
             .. '"'
         os.execute(cmd)
-        dbg("browse_files() command finished, reading temp file: " .. tmp_unix)
 
-        local f = vlc.io.open(tmp_unix, "r")
-        if not f then
-            dbg("browse_files() no temp file (user cancelled?)")
-            return
-        end
-
-        local files = {}
-        while true do
-            local line = f:read("*l")
-            if not line then break end
-            line = string.match(line, "^%s*(.-)%s*$")
-            -- Skip BOM if present
-            if string.byte(line, 1) == 239 and string.byte(line, 2) == 187
-               and string.byte(line, 3) == 191 then
-                line = string.sub(line, 4)
-                line = string.match(line, "^%s*(.-)%s*$")
-            end
-            if line ~= "" then
-                table.insert(files, line)
-            end
-        end
-        f:close()
-        os.remove(tmp_unix)
-        dbg("browse_files() parsed " .. #files .. " files")
-
-        if #files > 0 then
-            selected_files[day_index] = files
-            days[day_index].info:set_text(#files .. " file(s)")
-            refresh_file_list(day_index)
-            status_label:set_text(DAY_NAMES[day_index] .. ": Selected " .. #files .. " file(s)")
-        end
+        status_label:set_text("Pick files in the dialog. Click any button here to load.")
         dlg:update()
-        dbg("browse_files() done")
+        dbg("browse_files() launched async picker")
         return
     end
 
@@ -424,8 +403,57 @@ function refresh_file_list(day_index, highlight_idx)
     dlg:update()
 end
 
+function load_browse_result(day_index)
+    local tmp_dir = vlc.config.userdatadir() .. "/scheduler"
+    local tmp_unix = tmp_dir .. "/browse_tmp.txt"
+
+    local f = vlc.io.open(tmp_unix, "r")
+    if not f then return false end
+
+    local files = {}
+    while true do
+        local line = f:read("*l")
+        if not line then break end
+        line = string.match(line, "^%s*(.-)%s*$")
+        -- Skip BOM if present
+        if string.byte(line, 1) == 239 and string.byte(line, 2) == 187
+           and string.byte(line, 3) == 191 then
+            line = string.sub(line, 4)
+            line = string.match(line, "^%s*(.-)%s*$")
+        end
+        if line ~= "" then
+            table.insert(files, line)
+        end
+    end
+    f:close()
+    os.remove(tmp_unix)
+
+    if #files > 0 then
+        selected_files[day_index] = files
+        days[day_index].info:set_text(#files .. " file(s)")
+        refresh_file_list(day_index)
+        status_label:set_text(DAY_NAMES[day_index] .. ": Selected " .. #files .. " file(s)")
+        dlg:update()
+        return true
+    end
+    return false
+end
+
+function try_load_pending()
+    if not pending_browse_day then return false end
+    if load_browse_result(pending_browse_day) then
+        local day = pending_browse_day
+        pending_browse_day = nil
+        return true, day
+    end
+    return false
+end
+
 function show_files(day_index)
     sync_if_same_time()
+    -- Check if there's a pending browse result
+    local loaded, loaded_day = try_load_pending()
+    if loaded and loaded_day == day_index then return end
     refresh_file_list(day_index)
 end
 
@@ -439,6 +467,7 @@ function get_selected_index()
 end
 
 function click_move_up()
+    try_load_pending()
     if not viewing_day then return end
     local sel = get_selected_index()
     local files = selected_files[viewing_day]
@@ -448,6 +477,7 @@ function click_move_up()
 end
 
 function click_move_down()
+    try_load_pending()
     if not viewing_day then return end
     local sel = get_selected_index()
     local files = selected_files[viewing_day]
@@ -457,6 +487,7 @@ function click_move_down()
 end
 
 function click_remove()
+    try_load_pending()
     if not viewing_day then return end
     local sel = get_selected_index()
     local files = selected_files[viewing_day]
@@ -502,6 +533,10 @@ function ensure_scheduler_autostart(conf_path)
 
     pcall(function()
         vlc.config.set("scheduler-config", conf_path)
+    end)
+
+    pcall(function()
+        vlc.config.set("scheduler-fullscreen", true)
     end)
 
     -- 2. Also directly patch vlcrc file as backup (in case VLC doesn't

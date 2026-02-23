@@ -598,7 +598,7 @@ vlc_module_begin()
                N_("Path to the schedule configuration file. "
                   "Format: DAY HH:MM /path/to/playlist.m3u"),
                false)
-    add_bool("scheduler-fullscreen", false,
+    add_bool("scheduler-fullscreen", true,
              N_("Fullscreen on schedule"),
              N_("Switch to fullscreen when a scheduled playlist starts"),
              false)
